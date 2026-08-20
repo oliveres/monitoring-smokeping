@@ -1,5 +1,11 @@
 ---
-# Referenční pravidla - nasazuje se na centrální Prometheus, ne do agenta.
+# Nasazuje se na CENTRÁLNÍ Prometheus, ne do agenta v tomhle stacku.
+# Agent běží s --agent, což znamená žádné query API a žádná pravidla.
+#
+# Konvence labelů po metric_relabel_configs v prometheus.yml.template:
+#   host   = stroj, ZE kterého měříme (vantage point, z HOSTNAME)
+#   target = cíl pingu (8.8.8.8, www.nix.cz, ...)
+#   ip     = vyresolvovaná adresa cíle
 #
 # Prober nemá metriku packet loss. Počítá se z rozdílu odeslaných pingů
 # (smokeping_requests_total) a přijatých odpovědí
@@ -8,8 +14,8 @@
 groups:
   - name: smokeping
     rules:
-      # Ladicí recording rule - loss se používá na víc místech, ať se nepočítá
-      # pokaždé znovu a dashboardy i alerty koukají na tu samou definici.
+      # Recording rules - loss a kvantily se používají na víc místech,
+      # ať dashboardy i alerty koukají na tu samou definici.
       - record: smokeping:packet_loss_ratio:rate5m
         expr: |
           1 - (
@@ -20,7 +26,7 @@ groups:
       - record: smokeping:latency_p90:rate5m
         expr: |
           histogram_quantile(0.90,
-            sum by (vantage, host, ip, le) (
+            sum by (host, target, ip, le) (
               rate(smokeping_response_duration_seconds_bucket[5m])
             )
           )
@@ -28,7 +34,7 @@ groups:
       - record: smokeping:latency_p50:rate5m
         expr: |
           histogram_quantile(0.50,
-            sum by (vantage, host, ip, le) (
+            sum by (host, target, ip, le) (
               rate(smokeping_response_duration_seconds_bucket[5m])
             )
           )
@@ -42,8 +48,8 @@ groups:
           severity: warning
         annotations:
           summary: >-
-            Packet loss {{ $value | humanizePercentage }} na {{ $labels.host }}
-            z {{ $labels.vantage }}
+            Packet loss {{ $value | humanizePercentage }} na {{ $labels.target }}
+            z {{ $labels.host }}
           description: >-
             Než z tohohle uděláš stránkovací alert, ověř, že cíl nemá ICMP rate
             limit. Spousta routerů a cloud edge zařízení limituje echo reply na
@@ -58,7 +64,7 @@ groups:
           severity: critical
         annotations:
           summary: >-
-            {{ $labels.host }} neodpovídá na ping z {{ $labels.vantage }}
+            {{ $labels.target }} neodpovídá na ping z {{ $labels.host }}
             (pingy odchází, nic se nevrací)
 
       - alert: SmokepingHighLatency
@@ -68,8 +74,8 @@ groups:
           severity: warning
         annotations:
           summary: >-
-            p90 latence {{ $value | humanizeDuration }} na {{ $labels.host }}
-            z {{ $labels.vantage }}
+            p90 latence {{ $value | humanizeDuration }} na {{ $labels.target }}
+            z {{ $labels.host }}
 
       - alert: SmokepingHighJitter
         expr: |
@@ -79,8 +85,8 @@ groups:
           severity: warning
         annotations:
           summary: >-
-            Jitter (p90-p50) {{ $value | humanizeDuration }} na {{ $labels.host }}
-            z {{ $labels.vantage }}
+            Jitter (p90-p50) {{ $value | humanizeDuration }} na {{ $labels.target }}
+            z {{ $labels.host }}
           description: >-
             Numerický ekvivalent toho, co Smokeping kreslil jako "kouř".
 
@@ -91,8 +97,22 @@ groups:
           severity: warning
         annotations:
           summary: >-
-            Prober na {{ $labels.vantage }} nedokáže odesílat pakety
+            Prober na {{ $labels.host }} nedokáže odesílat pakety
           description: >-
             Tohle je skoro vždy lokální problém, ne problém trasy: chybějící
             CAP_NET_RAW, plná odchozí fronta nebo rozbité routování.
             Zkontroluj user/cap_add v compose.
+
+      # Agent přestal doručovat do centrálu.
+      - alert: SmokepingAgentRemoteWriteFailing
+        expr: |
+          rate(prometheus_remote_storage_samples_failed_total{role="smokeping"}[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Smokeping agent na {{ $labels.host }} neodesílá do centrálu
+          description: >-
+            Zkontroluj CENTRAL_PROMETHEUS_URL, basic auth a Caddy.
+            WAL je na named volume, takže krátký výpadek se dožene sám.

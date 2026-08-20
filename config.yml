@@ -1,0 +1,37 @@
+---
+# Seznam cílů pro smokeping_prober.
+#
+# Config je zapečený v image, takže změna targetů = git push + redeploy stacku.
+# POST /-/reload je tu k ničemu, soubor v běžícím kontejneru se nemění.
+# Vedlejší efekt je ale výhoda: targety jsou verzované spolu s image,
+# takže rollback stacku vrátí i seznam cílů.
+#
+# Pole interval / network / protocol / size / source jsou v každé skupině volitelná:
+#   interval: Go time.ParseDuration syntax          (default 1s)
+#   network:  ip | ip4 | ip6                        (default ip = automaticky)
+#   protocol: icmp | udp                            (default icmp, chce --privileged)
+#   size:     24-65535 B                            (default 56)
+#   source:   zdrojová IP                           (default automaticky)
+
+targets:
+  # --- LAN ------------------------------------------------------------------
+  - hosts:
+      - 192.168.1.1            # gateway
+      - 192.168.1.155          # BYD LVS BMU
+    interval: 1s
+    network: ip4
+
+  # --- Upstream / peering ---------------------------------------------------
+  - hosts:
+      - 8.8.8.8
+      - 1.1.1.1
+      - www.nix.cz
+    interval: 1s
+    network: ip4
+
+  # --- IPv6 -----------------------------------------------------------------
+  # Oproti Smokepingu se v4 a v6 drží odděleně, ne "co zrovna vyresolvuje".
+  - hosts:
+      - 2001:4860:4860::8888
+    interval: 1s
+    network: ip6

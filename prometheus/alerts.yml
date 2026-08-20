@@ -1,0 +1,98 @@
+---
+# Referenční pravidla - nasazuje se na centrální Prometheus, ne do agenta.
+#
+# Prober nemá metriku packet loss. Počítá se z rozdílu odeslaných pingů
+# (smokeping_requests_total) a přijatých odpovědí
+# (smokeping_response_duration_seconds_count).
+
+groups:
+  - name: smokeping
+    rules:
+      # Ladicí recording rule - loss se používá na víc místech, ať se nepočítá
+      # pokaždé znovu a dashboardy i alerty koukají na tu samou definici.
+      - record: smokeping:packet_loss_ratio:rate5m
+        expr: |
+          1 - (
+              rate(smokeping_response_duration_seconds_count[5m])
+            / rate(smokeping_requests_total[5m])
+          )
+
+      - record: smokeping:latency_p90:rate5m
+        expr: |
+          histogram_quantile(0.90,
+            sum by (vantage, host, ip, le) (
+              rate(smokeping_response_duration_seconds_bucket[5m])
+            )
+          )
+
+      - record: smokeping:latency_p50:rate5m
+        expr: |
+          histogram_quantile(0.50,
+            sum by (vantage, host, ip, le) (
+              rate(smokeping_response_duration_seconds_bucket[5m])
+            )
+          )
+
+      # --- Alerty ----------------------------------------------------------
+
+      - alert: SmokepingPacketLoss
+        expr: smokeping:packet_loss_ratio:rate5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Packet loss {{ $value | humanizePercentage }} na {{ $labels.host }}
+            z {{ $labels.vantage }}
+          description: >-
+            Než z tohohle uděláš stránkovací alert, ověř, že cíl nemá ICMP rate
+            limit. Spousta routerů a cloud edge zařízení limituje echo reply na
+            1-2/s, což při interval 1s vyrobí falešný loss.
+
+      - alert: SmokepingTargetUnreachable
+        expr: |
+          rate(smokeping_response_duration_seconds_count[5m]) == 0
+          and rate(smokeping_requests_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: >-
+            {{ $labels.host }} neodpovídá na ping z {{ $labels.vantage }}
+            (pingy odchází, nic se nevrací)
+
+      - alert: SmokepingHighLatency
+        expr: smokeping:latency_p90:rate5m > 0.15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            p90 latence {{ $value | humanizeDuration }} na {{ $labels.host }}
+            z {{ $labels.vantage }}
+
+      - alert: SmokepingHighJitter
+        expr: |
+          smokeping:latency_p90:rate5m - smokeping:latency_p50:rate5m > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Jitter (p90-p50) {{ $value | humanizeDuration }} na {{ $labels.host }}
+            z {{ $labels.vantage }}
+          description: >-
+            Numerický ekvivalent toho, co Smokeping kreslil jako "kouř".
+
+      - alert: SmokepingSendErrors
+        expr: rate(smokeping_send_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Prober na {{ $labels.vantage }} nedokáže odesílat pakety
+          description: >-
+            Tohle je skoro vždy lokální problém, ne problém trasy: chybějící
+            CAP_NET_RAW, plná odchozí fronta nebo rozbité routování.
+            Zkontroluj user/cap_add v compose.

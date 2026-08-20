@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "packageRules": [
+    {
+      "description": "Upstream smokeping_prober - bump FROM tagu v Dockerfile",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "quay.io/superq/smokeping-prober"
+      ],
+      "automerge": false,
+      "commitMessageTopic": "smokeping_prober"
+    }
+  ]
+}

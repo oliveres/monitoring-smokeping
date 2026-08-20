@@ -1,0 +1,19 @@
+---
+# Referenční snippet - tenhle soubor stack nekonzumuje.
+# Doplň do scrape_configs Prometheus agenta na daném vantage pointu.
+#
+# Label `vantage` je to, co ti dá federaci měřicích bodů, kterou Smokeping
+# řešil master/slave rsyncem konfigu. Na každém dalším hostu nasadíš ten samý
+# stack a změníš jen tuhle hodnotu.
+#
+# scrape_interval 15s při ping intervalu 1s = 15 pingů na scrape.
+# Delší scrape data neztratí (jsou to countery), jen zhrubne heatmapa.
+
+scrape_configs:
+  - job_name: smokeping
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 127.0.0.1:9374
+        labels:
+          vantage: supermicro-proxmox

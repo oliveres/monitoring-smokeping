@@ -1,0 +1,54 @@
+---
+services:
+  smokeping-prober:
+    build:
+      context: .
+    image: local/smokeping-prober:latest
+
+    # Vynutí build při každém `up`. Cache u COPY je content-addressed, takže
+    # beze změny config.yml je to okamžitý cache hit, se změnou se vrstva
+    # přestaví. Bez tohohle může Portainer při redeploy sáhnout po starém
+    # image a ty se pak divíš, proč se nové targety neprojevily.
+    pull_policy: build
+
+    container_name: smokeping-prober
+    restart: unless-stopped
+
+    # Host network namespace: měříme reálnou cestu hosta, ne docker0 + NAT.
+    # Důsledky:
+    #   - `ports:` se ignoruje, port se řídí přes --web.listen-address
+    #   - per-container `sysctls:` pro net.* nejde nastavit (netns je hostovská)
+    network_mode: host
+
+    # Raw ICMP socket potřebuje CAP_NET_RAW EFEKTIVNÍ v procesu.
+    # NET_RAW je v defaultní sadě Dockeru, ale upstream image běží jako nobody,
+    # takže samotné cap_add nestačí - odtud user: root.
+    #
+    # Varianta bez roota: vypustit --privileged níže a nastavit na HOSTU
+    #   /etc/sysctl.d/99-ping.conf -> net.ipv4.ping_group_range = 0 2147483647
+    # To ale znamená zásah do bare metalu, čemuž se tady vyhýbáme.
+    user: root
+    cap_add:
+      - NET_RAW
+
+    environment:
+      # Na multi-CPU strojích doporučuje upstream omezit prober na jedno CPU -
+      # míň cross-CPU context switchů a kopírování paketů z kernelu.
+      GOMAXPROCS: "1"
+
+    command:
+      - --config.file=/etc/smokeping_prober/config.yml
+      - --privileged
+      - --web.listen-address=127.0.0.1:9374
+      # Buckety jsou GLOBÁLNÍ CLI flag, per-target je nastavit nejde.
+      # Pozdější změna udělá zlom v historických sériích, takže rozmyslet teď.
+      # Tahle sada: 13 bucketů, rozsah 0,2 ms - 1 s, hustota kolem 5-50 ms.
+      # Default upstreamu je 20 bucketů od 50 us do 26 s - půlka vždy prázdná.
+      - --buckets=0.0002,0.0005,0.001,0.002,0.004,0.008,0.015,0.025,0.05,0.1,0.2,0.5,1.0
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9374/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

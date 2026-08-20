@@ -1,0 +1,65 @@
+# Smokeping agent - scrapuje lokální prober a posílá do centrálního Prometheusu.
+# Generuje se při buildu z této šablony přes envsubst (viz Dockerfile).
+#
+# POZOR: envsubst nahradí KAŽDÝ výskyt $VAR. V relabel replacement se proto
+# nesmí objevit $1 / $2 - envsubst by je snědl a nahradil prázdným řetězcem.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    host: '${HOSTNAME}'
+    role: 'smokeping'
+
+scrape_configs:
+  # Lokální prober. Oba kontejnery jedou v host netns, takže 127.0.0.1
+  # je doslova ten samý socket - žádný bridge, žádný host.docker.internal.
+  - job_name: 'smokeping'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['127.0.0.1:9374']
+    relabel_configs:
+      - target_label: instance
+        replacement: '${HOSTNAME}'
+    metric_relabel_configs:
+      # Prober používá label `host` pro CÍL pingu (host="8.8.8.8").
+      # Napříč monitoringem ale `host` znamená stroj, ZE kterého měříme.
+      # Cíl si tedy přejmenujeme na `target` a `host` zahodíme - doplní
+      # ho zpátky external_labels správnou hodnotou ${HOSTNAME}.
+      #
+      # metric_relabel_configs běží před remote write, takže se to stihne.
+      - source_labels: [host]
+        target_label: target
+        action: replace
+      - regex: 'host'
+        action: labeldrop
+
+  # Self-monitoring agenta - ať víš, když přestane doručovat.
+  # Port 9091 je i default pushgateway; kdyby ti na hostu kolidoval,
+  # změň ho tady i v `command` v docker-compose.yml.
+  - job_name: 'smokeping-agent'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['127.0.0.1:9091']
+    relabel_configs:
+      - target_label: instance
+        replacement: '${HOSTNAME}'
+
+remote_write:
+  - url: '${CENTRAL_PROMETHEUS_URL}'
+    basic_auth:
+      username: '${BASIC_AUTH_USER}'
+      password: '${BASIC_AUTH_PASSWORD}'
+
+    queue_config:
+      capacity: 10000
+      max_shards: 10
+      min_shards: 1
+      max_samples_per_send: 5000
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 5s
+
+    metadata_config:
+      send: true
+      send_interval: 1m

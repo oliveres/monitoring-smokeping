@@ -1,5 +1,8 @@
 ---
 services:
+  # ---------------------------------------------------------------------------
+  # Měřicí sonda
+  # ---------------------------------------------------------------------------
   smokeping-prober:
     build:
       context: .
@@ -39,6 +42,8 @@ services:
     command:
       - --config.file=/etc/smokeping_prober/config.yml
       - --privileged
+      # Loopback stačí: agent níž jede taky v host netns, takže je to
+      # ten samý socket. Ven se nevystavuje nic.
       - --web.listen-address=127.0.0.1:9374
       # Buckety jsou GLOBÁLNÍ CLI flag, per-target je nastavit nejde.
       # Pozdější změna udělá zlom v historických sériích, takže rozmyslet teď.
@@ -52,3 +57,46 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Agent - scrapuje prober a posílá do centrálního Prometheusu
+  # ---------------------------------------------------------------------------
+  prometheus:
+    build:
+      context: ./prometheus
+      dockerfile: Dockerfile
+      args:
+        HOSTNAME: ${HOSTNAME:-smokeping-host}
+        CENTRAL_PROMETHEUS_URL: ${CENTRAL_PROMETHEUS_URL}
+        BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+        BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-}
+    image: local/smokeping-agent:latest
+    pull_policy: build
+
+    container_name: smokeping-agent
+    restart: unless-stopped
+    user: "nobody"
+
+    # Taky host netns, aby dosáhl na proberův loopback bez vystavování portu.
+    network_mode: host
+
+    volumes:
+      # WAL na named volume: když centrální Prometheus vypadne a kontejner
+      # se mezitím restartuje, nenasbíraná data přežijí.
+      - agent-wal:/prometheus
+
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      # Skutečný agent mode, ne jen retention=0. Žádná TSDB, žádné query API,
+      # žádná pravidla - jen scrape a remote write. Recording rules a alerty
+      # z prometheus/alerts.yml patří na CENTRÁLNÍ Prometheus, ne sem.
+      - '--agent'
+      - '--storage.agent.path=/prometheus'
+      - '--web.listen-address=127.0.0.1:9091'
+      - '--web.enable-lifecycle'
+
+    depends_on:
+      - smokeping-prober
+
+volumes:
+  agent-wal:
